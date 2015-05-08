@@ -181,10 +181,97 @@ overload.fit <- gamlr(mmbike,overload,lmr=1e-4,family="binomial",standardize=FAL
 # dev.off()
 
 # 3.2 - Look at the hour of day effects on probability of overload
+overload.fit.coef <- coef(overload.fit)
+# Find the dteday coefficients and pull them into a separate structure
+overload.fit.coef.hr <- overload.fit.coef[grepl(glob2rx('hr*'), rownames(overload.fit.coef)),]
 
+for (i in 1:length(overload.fit.coef.hr)){
+  print(c(colnames(overload.fit.coef.hr)[i],overload.fit.coef.hr[i]))
+}
+
+# Focus on hr2 on a business day to compare the results to question 2
+# ~> hr2 0.983
+# ~> exp(0.983)-1
+# ~> [1] 1.672462
+
+## 3.3 - Find critical p cut-off
+
+## 3.4 - Plot ROC curve
+source('../Utility Scripts/roc.r')
+overload.pred <- predict(overload.fit,mmbike,type="response")
+# png('overload_roc_curve.png')
+roc(overload.pred,overload,main="ROC Curve for Overload")
+
+points(x= 1-mean((overload.pred<.667)[overload==0]),
+y=mean((overload.pred>.667)[overload==1]),
+cex=1.5, pch=20, col='red')
+# dev.off()
+
+## 3.5 - Test sample
+set.seed(5807)
+test <- sample(1:nrow(mmbike), 3000)
+
+# Fit by excluding the test sample
+overload.train <- overload[-test]
+mmbike.train <- mmbike[-test,]
+overload.fit.train <- gamlr(mmbike.train,overload.train,lmr=1e-4,family="binomial",standardize=FALSE)
+
+# Predict for the test set
+overload.pred.test <- predict(overload.fit.train,mmbike[test,],type="response")
+
+# Plot ROC curve for OOS predictions
+# png('oos_roc.png')
+# roc(overload.pred.test,overload[test],main="ROC Curve for OOS Prediction of Overload")
+# dev.off()
 
 ##### Q4: treatment effects
+## 4.1 - Impact of humidity baised on 'naive' regression
 coef(fitlin)["hum",]
+# ~> [1] -0.04980466
+exp(coef(fitlin)["hum",])-1
+# ~> [1] -0.04858474
+
+## 4.2 - Predict humidity from the other covariates
+d <- biketab[,hum]
+covars <- subset(biketab, select = c(1:12))
+controls <- sparse.model.matrix(hum ~ .,
+  data=naref(covars))[,-1]
+
+# Run a regression to predict d from the controls
+treat <- gamlr(controls,d)
+
+# Predict dhat from the fitted betas
+dhat <- predict(treat, controls, type="response")
+plot(dhat,d,bty="n",pch=21,bg=8)
+
+# Calculate the in sample R2 for the d on x regression
+cor(drop(dhat),d)^2
+# ~> [1] 0.8107548
+
+## 4.3 - Estimate independent effect of humidity
+causal <- gamlr(cBind(d,dhat,controls),y,free=2)
+
+# What is the beta on the independent effect of d?
+coef(causal)["d",]
+# ~> [1] -0.03802219
+
+## 4.4 Extend the fitlin to include a temperature / humidity interaction
+mmbike.th <- sparse.model.matrix(
+  cnt ~ . + yr*mnth + hr*notbizday + temp*hum,
+  data=naref(biketab))[,-1]
+
+fitlin.th <- cv.gamlr( mmbike.th, y, lmr=1e-4, verb=TRUE )
+
+coef(fitlin.th$gamlr)["hum",]
+# ~> [1] -0.04803867
+coef(fitlin.th$gamlr)["temp:hum",]
+# ~> [1] 0.05051735
+
+## 4.5 - Extend 4.3 to include the temp hum interaction
+causal.dep <- cbind(d,dhat,covars)
+causal.dep.int <- sparse.model.matrix(d ~ . + temp*dhat - dhat,data=naref(causal.dep))
+
+causal.temp <- gamlr(causal.dep.int,y,free=)
 
 ##### BONUS
 # Huge variety in what you could do here...
