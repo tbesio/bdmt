@@ -49,7 +49,7 @@ daytots$pvals <- 2*pnorm(-abs(daytots$std.resid))
 daytots.ordered <- daytots[order(pvals),]
 head(daytots.ordered,10)
 
-# 1.4 - Use the BH Algorithm to calculate the critical p-value for FDR of 5%
+## 1.4 - Use the BH Algorithm to calculate the critical p-value for FDR of 5%
 #       and list the days that are outliers based on this critical p-value
 # We use the FDR utility script to find the critical p-value
 source("../Utility Scripts/fdr.r")
@@ -69,7 +69,7 @@ daytots.outliers <- daytots.ordered[pvals<=crit.pval,]
 # The April 22 date was less dramatic although it appears that a Nor'easter passed through the
 # region on that day with potential snow/ice and cold temps.
 
-# 1.5 - Plot the p-value distribution
+## 1.5 - Plot the p-value distribution
 # png('daytots_pvals.png')
 # hist(daytots$pvals,main="Histogram of Outlier P-Values",xlab="Outlier P-Value")
 # dev.off()
@@ -85,8 +85,103 @@ y <- log(biketab$cnt)
 ## out to complex enough models (i.e. cv err is still decreasing at termination)
 fitlin <- cv.gamlr( mmbike, y, lmr=1e-4, verb=TRUE )
 
+## 2.2
+# Find the OOS R2
+summary(fitlin)[fitlin$seg.min,] # minimum avg OOS R2
+# ~>            lambda par    oos.r2
+# ~> seg69 0.001069549 669 0.9418906
+summary(fitlin)[fitlin$seg.1se,] # 1se rule
+# ~>            lambda par    oos.r2
+# ~> seg57 0.003266248 444 0.9407428
+
+# Plot to visualize
+# png('fitlin_OOS_R2.png')
+# plot(fitlin,main="OOS R2 for fitlin CV Lasso")
+# dev.off()
+
+## 2.3 - Compare the AICc, AIC, and BIC selection to each other and the CV rules
+# AIC
+summary(fitlin$gamlr)[which.min(AIC(fitlin$gamlr)),]
+# ~>             lambda par  df        r2      aicc
+# ~> seg71 0.0008879584 683 683 0.9471683 -35914.04
+# AICc
+summary(fitlin$gamlr)[which.min(AICc(fitlin$gamlr)),]
+# ~>             lambda par  df        r2      aicc
+# ~> seg71 0.0008879584 683 683 0.9471683 -35914.04
+# BIC
+summary(fitlin$gamlr)[which.min(BIC(fitlin$gamlr)),]
+# ~>            lambda par  df        r2      aicc
+# ~> seg52 0.005200791 317 317 0.9416156 -34953.39
+
+# Probably best to show as a plot
+ll <- log(fitlin$gamlr$lambda)
+par(mfrow=c(1,1))
+plot(fitlin$gamlr, col="grey",main="Selected Model Betas vs Log Lambda")
+abline(v=ll[which.min(AICc(fitlin$gamlr))], col="black", lty=2)
+abline(v=ll[which.min(AIC(fitlin$gamlr))], col="orange", lty=2)
+abline(v=ll[which.min(BIC(fitlin$gamlr))], col="green", lty=2)
+abline(v=log(fitlin$lambda.min), col="blue", lty=2)
+abline(v=log(fitlin$lambda.1se), col="purple", lty=2)
+legend("topright", bty="n", lwd=1,
+  col=c("black","orange","green","blue","purple"),
+  legend=c("AICc","AIC","BIC","CV.min","CV.1se"))
+
+## 2.4 - Print the top three dteday effects
+# First pull the coefficients from the 1se selected model
+fitlin.1se.coef <- coef(fitlin, select="1se")
+# Find the dteday coefficients and pull them into a separate structure
+fitlin.dteday <- fitlin.1se.coef[grepl(glob2rx('dteday*'), rownames(fitlin.1se.coef)),]
+# Store the coefficients in descending order of absolute value
+fitlin.dteday.ordered <- fitlin.dteday[order(abs(fitlin.dteday),decreasing=TRUE)]
+head(fitlin.dteday.ordered,3)
+# ~> dteday2012-12-26 dteday2011-12-25 dteday2011-10-29
+# ~>       -1.0435670       -1.0296656       -0.9707057
+
+exp(head(fitlin.dteday.ordered,3))-1
+# ~> dteday2012-12-26 dteday2011-12-25 dteday2011-10-29
+# ~>       -0.6478039       -0.6428736       -0.6211844
+
+## 2.5 - Bootstrap to the get the estimate of for the AICc and BIC selected lambdas
+
+aicc.selected <- c()
+bic.selected <- c()
+n <- nrow(mmbike)
+
+for(b in 1:100){
+  ## create a matrix of resampled indices
+  ib <- sample(1:n, n, replace=TRUE)
+  ## create the resampled data
+  mmbike.b <- mmbike[ib,]
+  yb <- y[ib]
+
+  fitb <- gamlr(mmbike.b,yb,lmr=1e-5, verb=FALSE)
+  aicc.selected <- c(aicc.selected,summary(fitb)[which.min(AICc(fitb)),1])
+  bic.selected <- c(bic.selected,summary(fitb)[which.min(BIC(fitb)),1])
+  print(b)
+}
+
+# Plot the results
+# png('bs_fitlin_aic.png')
+hist(aicc.selected,main="Histogram of AICc Selected Lambdas from Bootstrap")
+abline(v=summary(fitlin$gamlr)[which.min(AICc(fitlin$gamlr)),1],col='red')
+# dev.off()
+
+# png('bs_fitlin_bic.png')
+hist(bic.selected,main="Histogram of BIC Selected Lambdas from Bootstrap")
+abline(v=summary(fitlin$gamlr)[which.min(BIC(fitlin$gamlr)),1],col='red')
+# dev.off()
+
 ##### Q3: logistic regression
-overload <- biketab$cnt > 500
+# 3.1 - Creates the overload vector and converts to 0 and 1 for regression
+overload <- (biketab$cnt > 500)*1
+
+overload.fit <- gamlr(mmbike,overload,lmr=1e-4,family="binomial",standardize=FALSE)
+# png('overload_lasso_path.png')
+# plot(overload.fit,main="Lasso Path Plot for Overload Logistic Regression")
+# dev.off()
+
+# 3.2 - Look at the hour of day effects on probability of overload
+
 
 ##### Q4: treatment effects
 coef(fitlin)["hum",]
